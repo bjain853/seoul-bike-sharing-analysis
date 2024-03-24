@@ -1,0 +1,386 @@
+---
+title: "STAC67 Case Study"
+output:
+  pdf_document:
+    includes:
+      in_header: header.tex
+  html_document:
+    df_print: paged
+---
+\newpage
+
+
+
+
+# Background and Significance
+
+## Abstract
+
+Currently, Rental bikes are introduced in many urban cities for the enhancement of 
+mobility comfort. It is important to make the rental bike available and accessible to the 
+public at the right time as it lessens the waiting time. Eventually, providing the city with a 
+stable supply of rental bikes becomes a major concern.
+
+The crucial part is the prediction of bike count required at each hour for the stable 
+supply of rental bikes. The major factors affecting bike demand are weather and holidays.
+
+This case study aims to provide a better insight into the key factors
+affecting bike rental demand so that an efficient supply of bikes can be formulated.
+
+## Introduction
+
+The data was cleaned in three stages. Firstly, the predictor variable names were changed to $X_i$ and the response variable name to $Y$. Then, the dataset was divided into two equal parts, using the first part for training and the second part for testing our model. Lastly, NA or missing values were also checked for.
+
+We data was filtered out to only contain rows where the Functional Day (X12) value was true. This is because, the day being functional or not is independent of the other variables as it is caused usually by system failure which is unpredictable. Functional Day is also removed from consideration to be used as a predictor because of this reason. A functional day value being true has no affect on the magnitude of the number of bikes rented and when its false, the number of bikes rented are obviously 0.
+
+Stepwise model selection is used to get the initial model and thereafter, several diagnostic measures like Boxcox tranformation, weighted least squares are applied to get a better fit and satisfy all the Gauss-Markov assumptions for linear regression.
+
+## Variable Information
+
+```{r, echo=FALSE}
+library(knitr)
+
+df <- data.frame(Variable = c("Rented Bike Count (Y)", "Hour (X1)", "Temperature (X2)", "Humidity (X3)", "Windspeed (X4)", "Visibility (X5)", "Dew Point Temperature (X6)", "Solar Radiation (X7)", "Rainfall (X8)", "Snowfall (X9)", "Seasons (X10)", "Holiday (X11)", "Functional Day (X12)"),
+                 Description = c("Count of bikes rented at each hour", "Hour of the day", "Temperature in Celcius", "Humidity in %", "Wind speed in m/s", "Distance at which an object or light can be clearly discerned", "The temperature at which the air is saturated with moisture. (in Celcius)", "Solar Radiation in MJ/m2", "Rainfall in mm", "Snowfall in cm", "Seasons one of Winter, Summer, Spring, Autumn", "Holiday/No Holiday", "Functional or non-funcitonal hours"))
+
+kable(df)
+```
+### Histograms of Continuous Variables
+
+```{r, echo=FALSE}
+library(ggplot2)
+library(ggpubr)
+data = read.csv(file = 'SeoulBikeData.csv', header = TRUE, fileEncoding="latin1", colClasses=c("NULL",NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA))
+names(data) <- c("Y","X1","X2","X3","X4","X5","X6","X7","X8","X9","X10","X11", 
+                 "X12")
+
+data$D1 <- as.numeric(data$X10=="Summer")
+data$D2 <- as.numeric(data$X10=="Autumn")
+data$D3 <- as.numeric(data$X10=="Spring")
+
+data$D4 <- as.numeric(data$X11=="Holiday")
+set.seed(123)
+data <- data[data$X12 == "Yes",]
+n <- length(data$Y) / 2
+dataIdx <- sample(1:nrow(data), n, replace = FALSE)
+
+trainingData = data[dataIdx,]
+testingData = data[-dataIdx,]
+
+par(mfrow = c(3, 3))
+hist(trainingData$X1, xlab = "X1", main = "Histogram of X1")
+hist(trainingData$X2, xlab = "X2", main = "Histogram of X2")
+hist(trainingData$X3, xlab = "X3", main = "Histogram of X3")
+hist(trainingData$X4, xlab = "X4", main = "Histogram of X4")
+hist(trainingData$X5, xlab = "X5", main = "Histogram of X5")
+hist(trainingData$X6, xlab = "X6", main = "Histogram of X6")
+hist(trainingData$X7, xlab = "X7", main = "Histogram of X7")
+hist(trainingData$X8, xlab = "X8", main = "Histogram of X8")
+hist(trainingData$X9, xlab = "X9", main = "Histogram of X9")
+```
+
+### Bar Plots for Categorical Variables
+
+```{r, echo=FALSE}
+ggarrange(
+  ggplot(trainingData, aes(x = X10))
+  +
+    geom_bar(),
+  ggplot(trainingData, aes(x = X11))
+  +
+    geom_bar(), nrow = 3, ncol = 2
+)
+```
+
+### Histogram of Response Variable Y
+
+```{r, echo=FALSE}
+par(mfrow = c(2, 2))
+hist(trainingData$Y, xlab = "Y", main = "Histogram of Y")
+```
+
+# Exploratory Data Analysis
+## Correlation Between Continuous Variables
+```{r, echo=FALSE, out.width="50%"}
+library(reshape2)
+library(ggplot2)
+
+columnsNeeded <- c(1:10,14:17)
+cor(trainingData[,columnsNeeded])
+cormat <- round(cor(trainingData[,columnsNeeded]),2)
+melted_cormat <- melt(cormat)
+
+tileCorr = ggplot(data = melted_cormat, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile()
+pairs(trainingData[, columnsNeeded])
+```
+
+```{r, echo=FALSE, out.width="50%"}
+tileCorr
+```
+```{r}
+
+corrplot::corrplot(cormat)
+```
+
+
+From the correlation matrix, there looks to be a very strong correlation (=0.91468312) between $X2$ (Temperature) and $X6$ (Dew Point Temperature). So, to avoid multi-collinearity, the $X6$ variable is dropped. Also there is a strong correlation (=0.6759473864) between our dummy variable $D1$ and $X2$ so we can drop $D1$ as well. It is also hypothesized that temperature (X2) and hour of the day (X1) will have the strongest positive effect on rental bike usage due to their relatively high correlation with $Y$. These high correlation values can be observed by the lighter shade of blue in the second plot.
+
+# Assumption Testing
+```{r}
+library(onewaytests)
+bf.test(Y~factor(X11),data=trainingData)
+```
+Small p-value therefore $H_0$ is rejected and hence error doesn't have equal variances.
+
+## Center the training data
+```{r}
+centered_data <- apply(trainingData[,c(2:10)], 2, function(y) y - mean(y))
+trainingData <- data.frame(Y=trainingData$Y,centered_data,D1 = trainingData$D1,D2 =trainingData$D2,D3 =trainingData$D3,
+      D4= trainingData$D4)
+```
+
+# Model
+
+## Model Selection
+
+For model selection, both direction (forward and backward) stepwise model selection procedure is used taking into consideration the full model (with all predictors apart from interaction terms) and the simplest model (with no predictors) to find the predictors that are most important.
+```{r, echo=FALSE}
+library(MASS)
+
+
+fullFormula <- Y~I(X1^2)+X1*X2+X1*X3+X1*X4+X1*X5+X1*X6+X1*X7+X1*X8+X1*D2+X1*D3+X1*D4+                        I(X2^2)+X2*X3+X2*X4+X2*X5+X2*X6+X2*X7+X2*X8+X2*D2+X2*D3+X2*D4+ I(X3^2)+X3*X4+X3*X5+X3*X6+X3*X7+X3*X8+X3*D2+X3*D3+X3*D4+                      I(X4^2)+X4*X5+X4*X6+X4*X7+X4*X8+X4*D2+X4*D3+X4*D4+I(X5^2)+X5*X6+X5*X7+X5*X8+X5*D2+X5*D3+X5*D4+
+I(X6^2)+X6*X7+X6*X8+X6*D2+X6*D3+X6*D4+
+I(X7^2)+X7*X8+X7*D2+X7*D3+X7*D4+
+I(X8^2)+X8*D2+X8*D3+X8*D4+
+D2*D4+D3*D4
+                  
+fit1 <- lm(formula = fullFormula, data = trainingData)
+fit2 <- lm(Y ~ 1, data = trainingData)
+
+fitAIC = stepAIC(fit2, direction="both", scope=list(upper=fit1, lower=fit2), trace = 0)
+summary(fitAIC)
+```
+Iteration 2
+```{r}
+formula <- Y~X2 + X1 + I(X3^2) + D2 + I(X7^2) + I(X6^2) + 
+    X8 + I(X8^2) + X3 + X5 + I(X5^2) + X2:X1 + 
+    X1:X8 + X1:D2 + X2:X7 + X1:X3 + X1:D4 + X2:X8 + X8:X3 + X2:D3 + 
+    X7:D3 + D2:X3 + X3:D3 + X2:D2 + D4:X7 + X2:X5 + X3:X5 + 
+    X7:X3 + D2:X5 + D4:X5
+
+fit1 <- lm(formula = formula, data = trainingData)
+fit2 <- lm(Y ~ 1, data = trainingData)
+
+fitAIC = stepAIC(fit2, direction="both", scope=list(upper=fit1, lower=fit2), trace = 0)
+summary(fitAIC)
+
+```
+
+The adjusted R-squared value of this model is satisfactory but not adequate (=0.6467). Several diagnostic procedures will be followed to better this measure.
+
+
+## Model Validation
+
+```{r, echo=FALSE}
+par(mfrow = c(2, 2))
+plot(fitAIC$fitted, fitAIC$residuals)
+
+abline(0, 0)
+fitAIC$resid <- rstandard(fitAIC)
+
+qqnorm(fitAIC$resid)
+qqline(fitAIC$resid)
+```
+As can be seen from the residual plot, the equal variance assumption is clearly violated. Along with that, the residuals also don't seem to be evenly distributed. Also, from the QQ plot, it can be observed that the points stray away from the line for a huge chunk indicating that the residuals don't come from a normal distribution.
+
+## Model Diagnosis
+
+### Boxcox Tranformation
+
+```{r, echo=FALSE}
+par(mfrow = c(2, 2))
+model <- lm(formula = fullFormula, data = trainingData)
+res <- boxcox(model)
+mylambda <- res$x[which.max(res$y)]
+data.frame("Lambda"=mylambda)
+
+boxcox_formula <-  Y^mylambda~X2 + X1 + I(X3^2) + D2 + I(X7^2) + I(X6^2) + 
+    X8 + I(X8^2) + X3 + X5 + I(X5^2) + X2:X1 + 
+    X1:X8 + X1:D2 + X2:X7 + X1:X3 + X1:D4 + X2:X8 + X8:X3 + X2:D3 + 
+    X7:D3 + D2:X3 + X3:D3 + X2:D2 + D4:X7 + X2:X5 + X3:X5 + 
+    X7:X3 + D2:X5 + D4:X5
+
+fitBoxcox <- lm(boxcox_formula, data = trainingData)
+
+
+data.frame("R.squared"=summary(fitBoxcox)$adj.r.squared)
+```
+
+Upon doing a Boxcox transformation of the response variance, a lambda value of $\approx 0.26$ is obtained. When using this transformation, we get an improved adjusted R-squared value of $0.7140$ and improved residual and QQ plots.
+
+```{r, echo=FALSE}
+par(mfrow = c(2, 2))
+plot(fitBoxcox$fitted, fitBoxcox$residuals)
+abline(0, 0)
+fitBoxcox$resid <- rstandard(fitBoxcox)
+qqnorm(fitBoxcox$resid)
+qqline(fitBoxcox$resid)
+```
+The variances look comparatively more evenly distributed except some outliers and the QQ plot almost lies on a straight line.
+
+## Weighted Least Squares
+
+On doing a weighted least squares regression, there is not much affect on the adjusted R-squared value as it can still be rounded to the same 0.72 as seen above.
+```{r, echo=FALSE}
+library(car)
+library(MASS)
+
+wt <- 1 / lm((fitBoxcox$residuals)^2 ~ fitBoxcox$fitted.values)$fitted.values
+wls_model <- lm(formula = boxcox_formula, data = trainingData, weights = wt)
+
+data.frame("R.squared"=summary(wls_model)$adj.r.squared)
+```
+
+```{r, echo=FALSE}
+par(mfrow = c(2, 2))
+plot(wls_model$fitted, wls_model$residuals)
+abline(0, 0)
+wls_model$resid <- rstandard(wls_model)
+qqnorm(wls_model$resid)
+qqline(wls_model$resid)
+```
+There is also not any noticeable change in the residual and QQ plots.
+
+
+### Outlier Detection
+
+In this section, we would try identify the numerous outliers present in the model to give a better understanding of the model and the dataset to the reader.
+
+```{r, echo=FALSE}
+
+library(olsrr)
+
+
+p1 <- ols_plot_cooksd_chart(wls_model, print_plot = FALSE)
+p2 <- ols_plot_resid_stud(wls_model, print_plot = FALSE)
+p4 <- ols_plot_dffits(wls_model, print_plot = FALSE)
+p5 <- ols_plot_resid_lev(wls_model, print_plot = FALSE)
+ggarrange(p1$plot, p2$plot, p4$plot, p5$plot, ncol = 2, nrow = 2)
+
+
+#observation numbers for all techniques (4 vectors)
+cook_outliers              = p1$outliers$observation
+deleted_stu_resid_outliers = p2$outliers$observation
+dffits_outliers            = p4$outliers$observation
+leverage_outliers          = p5$outliers$observation
+```
+
+
+
+```{r, echo=FALSE}
+all_outliers <- union(union(union(cook_outliers, dffits_outliers), leverage_outliers), deleted_stu_resid_outliers)
+```
+
+By taking the union of outliers from all techniques with non-null outputs, a confident list of all outliers can be created.  The model outputted by removing these outliers had a considerable improvement in the adjusted R-squared value at 0.78, but is not a better fit when calculating MSPR and MSE. Also, the model gets biased as part of the data is removed. So, this model is rejected.
+
+```{r, echo=FALSE}
+striped_data <- trainingData[-all_outliers, ]
+
+outlierFit <- lm(formula = boxcox_formula, data = striped_data)
+
+wt.outlier <- 1 / lm((outlierFit$residuals)^2 ~ outlierFit$fitted.values)$fitted.values
+outlierFitWLS <- lm(formula = boxcox_formula, data = striped_data,weights=wt.outlier)
+anova(outlierFitWLS)
+data.frame("R.squared"=summary(outlierFitWLS)$adj.r.squared)
+```
+## Final Model
+
+The final model obtained through this study is:
+```{r}
+
+
+formulaReduced <- (Y^mylambda)~X2+X1+I(X3^2)+D2+I(X7^2)+I(X6^2)+I(X8^2)+D4+
+  X7+X3+X2:X1+X1:D2+X2:X7+X1:X3+X1:D4+X2:X8+X2:D3+
+  X3:D3+D4:D3+D4:X7+X2:X5+D4:X5+X8:D3
+
+outlierFitWLS <- lm(formula = formulaReduced, data = striped_data,
+                    weights=wt.outlier)
+```
+```{r}
+summary(outlierFitWLS)
+```
+```{r}
+anova(outlierFitWLS)
+```
+```{r}
+data.frame("R.squared"=summary(outlierFitWLS)$adj.r.squared)
+```
+
+$$
+Y = 0.0638399 X_1 +0.0747152  X_2 -0.0173887 X_3 + 0.0069165 X_4 -0.1092668 X_7 -0.4514658X_8 -0.0175294  X_9 +0.6943519  D_2 +\\0.3037648 D_3 -0.5313945 D_4 + 4.4066441
+$$
+Where $D_2$ , $D_3$ are dummy variables for season each representing Autumn and Spring season respectively while $D4$ is a dummy variable representing if there was a Holiday at that day or not.
+
+
+
+## Validate New Model
+
+## Check the Assumptions of Linear Model (Residual Analysis)
+```{r}
+residuals  <- outlierFitWLS$residuals
+fitted.values <- outlierFitWLS$fitted.values
+```
+1. Random Residuals & Constant Variance
+```{r}
+plot(fitted.values,residuals)
+plot(rstandard(outlierFitWLS))
+
+```
+2. Residuals follow normality
+```{r}
+qqnorm(residuals)
+qqline(residuals)
+hist(residuals)
+```
+
+
+
+### MSPR
+```{r}
+centered_test_data <- apply(testingData[,c(2:9)], 2, function(y) y - mean(y))
+centered_test_data <- data.frame(Y=testingData$Y,centered_test_data,
+                            D1=testingData$D1,D2=testingData$D2,
+                            D3 =testingData$D3,D4= testingData$D4)
+
+```
+
+```{r, echo=FALSE}
+predictVal <- predict(outlierFitWLS, centered_test_data)
+MSPR <- sum((centered_test_data$Y^mylambda - predictVal)^2) / n
+
+MSE <- anova(outlierFitWLS)["Residuals", "Mean Sq"]
+res <- c(MSE,MSPR)
+names(res) <- c("MSE","MSPR")
+res
+```
+
+As the MSPR and MSE values are fairly close, we can say that our selected model is a good fit for the data at hand. The testing dataset was used to calculate MSPR here.
+
+### VIF
+
+From the VIF table obtained from the "vif" function of the "car" library, there are no GVIF values > 10, so there is no serious multi-collinearity issue.
+
+```{r, echo=FALSE}
+library(car)
+vif <- vif(outlierFitWLS)
+vif[vif>5]
+```
+
+```{r, echo=FALSE}
+data.frame("Mean VIF"=mean(vif))
+```
+The mean VIF value is also not much larger than 1. So, we do not need to worry about multi-collinearity.
+
+
+Out of the qualitative variables we can see that $X3$,$X7$ and $X8$ have a negative effect on the response variable $Y$ keeping all the other factors constant, while $D4$ is the only qualitative variable showing this behaviour. Our model is also significant by the F-test with a p-value $< 2.2*10^{-16}$.Also all of the features selected are statistically significant proven by the extremely small p-values $< 2.2*10^{-16}$ for their t-tests.
